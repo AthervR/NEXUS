@@ -1,0 +1,37 @@
+# ~/nexus/config/models.yaml
+models:
+
+  main:
+    model_id: "meta-llama-3.1-8b-instruct"
+    description: "Primary brain — lab research, code gen, deep reasoning"
+    temperature: 0.7
+    max_tokens: 2048
+    top_p: 0.95
+
+  fast:
+    model_id: "llama-3.2-3b-instruct"
+    description: "Quick responder — confirmations, reminders, simple Q&A"
+    temperature: 0.3
+    max_tokens: 512
+    top_p: 0.9
+    top_k: 20
+    # Swap candidates:
+    # "phi-4-mini-instruct"          (smarter but ~17-20 tok/s, test first)
+
+  verify:
+    model_id: "deepseek/deepseek-r1-0528-qwen3-8b"
+    description: "Verifier — math checks, logic review, self-correction"
+    temperature: 0.6
+    max_tokens: 2048
+    top_p: 0.95
+    top_k: 20
+    # Swap candidates:
+    # "deepseek-r1-distill-qwen-14b" (stronger but needs more RAM)
+
+server:
+  url: "http://localhost:1234/v1/chat/completions"
+  timeout: 120
+  verify_timeout: 300
+
+confidence:
+  verification_threshold: 0.75
