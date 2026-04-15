@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# LM Studio / Models
+*.gguf
+*.bin
+*.safetensors
+models/
+.lmstudio/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+data/
