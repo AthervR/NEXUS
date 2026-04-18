@@ -53,18 +53,23 @@ def query_model(
     role: str,
     user_message: str,
     system_override: str = None,
+    history: list[dict] = None,
 ) -> tuple[str, float]:
     model_id    = get_model_id(role)
     temperature = get_temperature(role)
     max_tokens  = get_max_tokens(role)
     system      = system_override or SYSTEM_PROMPTS[role]
-    
+    final_message = user_message
+
+    # Build messages: system + history + current user message
+    messages = [{"role": "system", "content": system}]
+    if history:
+        messages.extend(history[-10:])  # cap at last 10 exchanges
+    messages.append({"role": "user", "content": final_message})
+
     payload = {
         "model": model_id,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user_message},
-        ],
+        "messages": messages,
         "temperature": temperature,
         "max_tokens":  max_tokens,
         "top_p":       CONFIG["models"][role].get("top_p", 0.95),
@@ -95,16 +100,16 @@ def query_model(
     except Exception as e:
         return f"[ERROR] Unexpected error: {str(e)}", 0.0
 
-# ── Role shortcuts ────────────────────────────────────────────────
-def ask_main(prompt: str) -> tuple[str, float]:
-    return query_model("main", prompt)
 
-def ask_fast(prompt: str) -> tuple[str, float]:
-    return query_model("fast", prompt)
+def ask_main(prompt: str, history: list[dict] = None) -> tuple[str, float]:
+    return query_model("main", prompt, history=history)
 
-def ask_verify(original_response: str, original_prompt: str) -> tuple[str, float]:
+def ask_fast(prompt: str, history: list[dict] = None) -> tuple[str, float]:
+    return query_model("fast", prompt, history=history)
+
+def ask_verify(original_response: str, original_prompt: str, history: list[dict] = None) -> tuple[str, float]:
     verify_prompt = (
         f"Original question: {original_prompt}\n\n"
         f"Response to verify:\n{original_response}"
     )
-    return query_model("verify", verify_prompt)
+    return query_model("verify", verify_prompt, history=history)

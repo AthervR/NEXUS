@@ -1,10 +1,10 @@
+# ~/nexus/core/orchestrator.py
 import time
-import yaml
-from pathlib import Path
+import sys
 from core.packet import NexusPacket
 from core.lm_client import ask_main, ask_fast, ask_verify, VERIFY_THRESHOLD
 
-# ── Task classification keywords ──────────────────────────────────
+# ── Task classification keywords ──────────────────────────────────────────────
 FAST_KEYWORDS = [
     "remind", "timer", "note", "add", "set", "when", "what time",
     "thanks", "ok", "yes", "no", "confirm", "cancel", "stop", "start",
@@ -18,44 +18,26 @@ VERIFY_KEYWORDS = [
     "watts", "amps", "volts", "hertz", "capacitor", "resistor",
 ]
 
-MAIN_KEYWORDS = [
-    "research", "explain", "design", "build", "code", "write", "generate",
-    "debug", "analyze", "schematic", "arduino", "python", "sensor",
-    "component", "datasheet", "project", "how do i", "what is",
-    "help me", "create", "implement", "integrate",
-]
 
-# ── Task classifier ───────────────────────────────────────────────
+# ── Task classifier ───────────────────────────────────────────────────────────
 def classify_task(text: str) -> tuple[str, str]:
-    """
-    Returns (task_type, worker_model) based on input text.
-    Priority: fast > verify > main (default)
-    """
     lower = text.lower()
 
-    # Short inputs almost always want fast response
     if len(text.split()) <= 4:
         return "quick", "fast"
 
-    # Check fast keywords first — these need no heavy reasoning
     for kw in FAST_KEYWORDS:
         if kw in lower:
             return "quick", "fast"
 
-    # Check if it's a calculation/verification task
     for kw in VERIFY_KEYWORDS:
         if kw in lower:
             return "calculation", "verify"
 
-    # Default to main brain for everything else
     return "lab_research", "main"
 
 
 def needs_verification(task_type: str, confidence: float) -> bool:
-    """
-    Decide if a response needs routing to the verifier.
-    Calculations always get verified. Low confidence triggers it too.
-    """
     if task_type == "calculation":
         return True
     if confidence < VERIFY_THRESHOLD:
@@ -63,11 +45,11 @@ def needs_verification(task_type: str, confidence: float) -> bool:
     return False
 
 
-# ── Main orchestration function ───────────────────────────────────
-def process(user_input: str, modality: str = "text") -> NexusPacket:
+# ── Core processing pipeline ──────────────────────────────────────────────────
+def process(user_input: str, history: list[dict], modality: str = "text") -> NexusPacket:
     """
-    Full NEXUS processing pipeline:
-    Input → Classify → Route → Execute → Verify? → Return
+    Full NEXUS processing pipeline with conversation history.
+    History is a list of {"role": "user"/"assistant", "content": "..."} dicts.
     """
     packet = NexusPacket(
         raw_input=user_input,
@@ -75,79 +57,144 @@ def process(user_input: str, modality: str = "text") -> NexusPacket:
         timestamp=time.time(),
     )
 
-    # ── Step 1: Classify ──────────────────────────────────────────
     task_type, worker = classify_task(user_input)
     packet.task_type    = task_type
     packet.worker_model = worker
 
-    print(f"\n[NEXUS] Input    : {user_input[:80]}")
-    print(f"[NEXUS] Task     : {task_type}")
-    print(f"[NEXUS] Routing  → {worker} model")
+    _divider()
+    print(f"  Task     : {task_type}")
+    print(f"  Routing  : {_model_label(worker)}")
+    _divider()
 
- # ── Step 2: Execute ───────────────────────────────────────────
     start = time.time()
 
     if worker == "fast":
-        response, confidence = ask_fast(user_input)
+        response, confidence = ask_fast(user_input, history=history)
 
     elif worker == "verify":
-        # Calculations: main brain computes FIRST, then verifier checks
-        print(f"[NEXUS] Computing via main model first...")
-        response, confidence = ask_main(user_input)
+        print(f"\n  [Step 1] Computing answer via main model...")
+        response, confidence = ask_main(user_input, history=history)
         elapsed = round(time.time() - start, 2)
-        print(f"[NEXUS] Response : {response[:100]}...")
-        print(f"[NEXUS] Confidence: {confidence:.2f}  |  Time: {elapsed}s")
+        _print_response("MAIN MODEL ANSWER", response, elapsed, confidence)
 
-        # Now send to verifier
-        print(f"[NEXUS] Verifying calculation...")
-        verified_response, v_confidence = ask_verify(response, user_input)
+        print(f"\n  [Step 2] Verifying with DeepSeek R1...")
+        verified_response, v_confidence = ask_verify(response, user_input, history=history)
         packet.verified = True
 
         if "[CORRECTED]" in verified_response:
-            print("[NEXUS] ⚠️  Correction found — using verified response")
+            print("\n  ⚠  Correction found — using verified response")
             response = verified_response
             confidence = v_confidence
         else:
-            print("[NEXUS] ✅ Calculation verified")
+            print("\n  ✓  Calculation verified")
 
     else:
-        response, confidence = ask_main(user_input)
+        response, confidence = ask_main(user_input, history=history)
 
     elapsed = round(time.time() - start, 2)
-    packet.raw_response = response
-    packet.confidence   = confidence
+    packet.raw_response    = response
+    packet.confidence      = confidence
+    packet.tts_text        = response
+    packet.display_content = response
 
-    print(f"[NEXUS] Response : {response[:100]}...")
-    print(f"[NEXUS] Confidence: {confidence:.2f}  |  Time: {elapsed}s")
-
-# ── Step 3: Verify if needed (non-calculation tasks only) ─────
     if needs_verification(task_type, confidence) and worker != "verify":
-        print(f"[NEXUS] Verifying response (conf={confidence:.2f})...")
-        verified_response, _ = ask_verify(response, user_input)
+        print(f"\n  [Confidence {confidence:.2f} < threshold] Verifying response...")
+        verified_response, _ = ask_verify(response, user_input, history=history)
         packet.verified = True
 
         if "[CORRECTED]" in verified_response:
-            print("[NEXUS] ⚠️  Correction found — using verified response")
+            print("  ⚠  Correction found — using verified response")
             packet.raw_response = verified_response
+            response = verified_response
         else:
-            print("[NEXUS] ✅ Response verified")
-
-    # ── Step 4: Package output ────────────────────────────────────
-    packet.tts_text      = packet.raw_response
-    packet.display_content = packet.raw_response
+            print("  ✓  Response verified")
 
     return packet
 
 
-# ── Quick test harness ────────────────────────────────────────────
-if __name__ == "__main__":
-    test_inputs = [
-        "Hey NEXUS, what's up?",
-        "What is a MOSFET and how does it work?",
-        "Calculate the resistance if voltage is 12V and current is 0.5A",
-    ]
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _divider():
+    print("─" * 50)
 
-    for test in test_inputs:
-        packet = process(test)
-        print(packet.summary())
+def _model_label(worker: str) -> str:
+    labels = {
+        "fast":   "Llama 3.2 3B  (fast)",
+        "main":   "Llama 3.1 8B  (main brain)",
+        "verify": "Main → DeepSeek R1  (calculate + verify)",
+    }
+    return labels.get(worker, worker)
+
+def _print_response(label: str, response: str, elapsed: float, confidence: float):
+    print(f"\n  [{label}]")
+    print(f"  Time: {elapsed}s  |  Confidence: {confidence:.2f}")
+    print()
+    for line in response.splitlines():
+        print(f"  {line}")
+
+
+# ── Interactive terminal loop ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    import sys
+    from voice.stt import listen_once
+    from voice.tts import speak
+
+    VOICE_MODE = "--voice" in sys.argv
+
+    print("\n" + "=" * 50)
+    print("  NEXUS — LOCAL AI ASSISTANT")
+    mode_str = "VOICE + TEXT" if VOICE_MODE else "TEXT ONLY"
+    print(f"  Mode: {mode_str}")
+    print("  Type 'exit' to quit" + (" | Say 'goodbye' to quit" if VOICE_MODE else ""))
+    print("=" * 50 + "\n")
+
+    history: list[dict] = []
+
+    greeting, _ = ask_fast(
+        "Greet the user warmly and ask what you can help with. One sentence.",
+        history=history,
+    )
+    print(f"[NEXUS] {greeting}\n")
+    if VOICE_MODE:
+        speak(greeting)
+
+    while True:
+        if VOICE_MODE:
+            user_input = listen_once(timeout=15.0)
+            if not user_input:
+                print("[NEXUS] (no input detected — listening again)")
+                continue
+            print(f"You: {user_input}")
+        else:
+            try:
+                user_input = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[NEXUS] Shutting down.")
+                sys.exit(0)
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in {"exit", "quit", "bye", "goodbye"}:
+            farewell, _ = ask_fast("Say a brief friendly goodbye.", history=history)
+            print(f"\n[NEXUS] {farewell}\n")
+            if VOICE_MODE:
+                speak(farewell)
+            sys.exit(0)
+
         print()
+        packet = process(user_input, history=history)
+
+        print()
+        _divider()
+        print(f"  NEXUS RESPONSE")
+        _divider()
+        print()
+        for line in packet.raw_response.splitlines():
+            print(f"  {line}")
+        print()
+
+        if VOICE_MODE:
+            speak(packet.raw_response)
+
+        history.append({"role": "user",      "content": user_input})
+        history.append({"role": "assistant", "content": packet.raw_response})
