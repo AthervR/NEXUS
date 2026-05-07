@@ -1,2 +1,2 @@
 # NEXUS - Local AI Lab & Life Assistant
-test
+Fun little vibe coded project
