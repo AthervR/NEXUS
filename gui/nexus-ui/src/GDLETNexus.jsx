@@ -1,9 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { CesiumGlobe } from "./CesiumGlobe.jsx";
 
 // ─── GDLET NEXUS — AI Command Center ────────────────────────────────────────
-// Deep-space purple-instrumented operational intelligence GUI
-// For NEXUS Project by athervrishi
-// Session 04 — WebSocket + Voice integration
+// v0.5.0 — Pre-Session 05 patch
+// Changes from v0.4.0:
+//   • World map: hand-drawn SVG paths → D3 geoNaturalEarth1 + world-atlas TopoJSON
+//   • Flights: hardcoded array → live OpenSky Network via FastAPI /api/flights
+//   • Markets: hardcoded array → live Yahoo Finance via FastAPI /api/markets
+//   • News: hardcoded array → live GDELT 2.0 via FastAPI /api/news
+//   • Copilot: WebSocket first, REST fallback (Session 04 pattern preserved)
+//   • Voice toggle + status badge (Session 04 preserved)
 
 // ─── THEME ──────────────────────────────────────────────────────────────────
 const T = {
@@ -29,110 +35,123 @@ const T = {
   borderActive: "rgba(139,92,246,0.35)",
 };
 
-// ─── SIMULATED DATA ─────────────────────────────────────────────────────────
-const NEWS_ITEMS = [
-  { id: 1, label: "BREAKING", color: T.red, title: "Taiwan Strait: PLA Navy exercises extended 48hrs — shipping rerouting via Luzon", region: "Asia-Pacific", time: "4m ago", severity: 5 },
-  { id: 2, label: "MARKET-MOVING", color: T.amber, title: "ECB signals emergency rate corridor discussion amid EUR/USD volatility spike", region: "Europe", time: "12m ago", severity: 4 },
-  { id: 3, label: "ESCALATING", color: T.red, title: "Red Sea: Houthi drone swarm detected — 3 commercial vessels diverted", region: "Middle East", time: "18m ago", severity: 5 },
-  { id: 4, label: "INFRASTRUCTURE", color: T.cyan, title: "Suez Canal throughput down 34% MTD — container rates climbing", region: "Global", time: "25m ago", severity: 3 },
-  { id: 5, label: "EMERGING", color: T.accentSoft, title: "TSMC Arizona fab yield rates reportedly exceeding projections — semiconductor supply shift", region: "North America", time: "31m ago", severity: 3 },
-  { id: 6, label: "WATCH", color: T.amber, title: "Nigeria crude output disruptions — Bonny Light loadings delayed 5+ days", region: "Africa", time: "38m ago", severity: 3 },
-  { id: 7, label: "TRAVEL IMPACT", color: T.cyan, title: "Frankfurt Airport: Lufthansa ground crew strike confirmed Apr 16–17", region: "Europe", time: "42m ago", severity: 2 },
-  { id: 8, label: "BREAKING", color: T.red, title: "South China Sea: Philippine Coast Guard reports laser incident near Scarborough", region: "Asia-Pacific", time: "51m ago", severity: 4 },
-];
-
-const MARKETS = [
-  { sym: "SPX", name: "S&P 500", val: "5,842.31", chg: "+0.67%", up: true },
-  { sym: "NDQ", name: "NASDAQ", val: "18,291.04", chg: "+1.12%", up: true },
-  { sym: "BTC", name: "Bitcoin", val: "97,421", chg: "+2.34%", up: true },
-  { sym: "ETH", name: "Ethereum", val: "3,812", chg: "+1.89%", up: true },
-  { sym: "EUR", name: "EUR/USD", val: "1.0834", chg: "-0.42%", up: false },
-  { sym: "OIL", name: "Brent Crude", val: "87.62", chg: "+3.14%", up: true },
-  { sym: "GLD", name: "Gold", val: "3,412", chg: "+0.28%", up: true },
-  { sym: "VIX", name: "VIX", val: "21.34", chg: "+8.21%", up: true },
-  { sym: "DXY", name: "Dollar Index", val: "104.82", chg: "+0.15%", up: true },
-  { sym: "UST", name: "US 10Y Yield", val: "4.38%", chg: "+2bp", up: true },
-];
-
-const FLIGHTS = [
-  { id: "f1", call: "FORTE12", type: "SURV", lat: 14.5, lng: 44.2, alt: "55,000ft", hdg: "NE", note: "RQ-4 Global Hawk — Red Sea ISR pattern" },
-  { id: "f2", call: "DUKE41", type: "MIL", lat: 25.3, lng: 121.5, alt: "28,000ft", hdg: "S", note: "P-8A Poseidon — Taiwan Strait patrol" },
-  { id: "f3", call: "UAE203", type: "COM", lat: 33.8, lng: 51.4, alt: "38,000ft", hdg: "W", note: "DXB→FRA — Rerouting south of conflict zone" },
-  { id: "f4", call: "LAGR225", type: "CARGO", lat: 6.5, lng: 3.4, alt: "32,000ft", hdg: "N", note: "Lagos→AMS — Heavy cargo, oil equipment" },
-];
-
+// ─── STATIC DATA — manually curated, not from API ───────────────────────────
 const HOTSPOTS = [
-  { id: "h1", name: "Taiwan Strait", lat: 24.5, lng: 119, risk: 92, type: "military" },
-  { id: "h2", name: "Red Sea / Bab el-Mandeb", lat: 13.5, lng: 43, risk: 88, type: "conflict" },
-  { id: "h3", name: "South China Sea", lat: 11, lng: 115, risk: 75, type: "territorial" },
-  { id: "h4", name: "Strait of Hormuz", lat: 26.5, lng: 56.5, risk: 65, type: "chokepoint" },
-  { id: "h5", name: "Suez Canal", lat: 30.5, lng: 32.3, risk: 58, type: "infrastructure" },
-  { id: "h6", name: "Niger Delta", lat: 5.5, lng: 6.5, risk: 52, type: "disruption" },
-  { id: "h7", name: "Eastern Ukraine", lat: 48.5, lng: 37.5, risk: 85, type: "conflict" },
+  { id: "h1", name: "Taiwan Strait",          lat: 24.5, lng: 119,  risk: 92, type: "military"       },
+  { id: "h2", name: "Red Sea / Bab el-Mandeb", lat: 13.5, lng: 43,   risk: 88, type: "conflict"       },
+  { id: "h3", name: "South China Sea",         lat: 11,   lng: 115,  risk: 75, type: "territorial"    },
+  { id: "h4", name: "Strait of Hormuz",        lat: 26.5, lng: 56.5, risk: 65, type: "chokepoint"     },
+  { id: "h5", name: "Suez Canal",              lat: 30.5, lng: 32.3, risk: 58, type: "infrastructure" },
+  { id: "h6", name: "Niger Delta",             lat: 5.5,  lng: 6.5,  risk: 52, type: "disruption"     },
+  { id: "h7", name: "Eastern Ukraine",         lat: 48.5, lng: 37.5, risk: 85, type: "conflict"       },
 ];
 
 const AGENDA = [
-  { time: "09:00", title: "Stand-up: NEXUS sprint review", tag: "work" },
-  { time: "11:30", title: "Hardware delivery — OCuLink cable", tag: "nexus" },
-  { time: "14:00", title: "Lab session: XArm 1S calibration", tag: "lab" },
+  { time: "09:00", title: "Stand-up: NEXUS sprint review",         tag: "work"     },
+  { time: "11:30", title: "Hardware delivery — OCuLink cable",      tag: "nexus"    },
+  { time: "14:00", title: "Lab session: XArm 1S calibration",       tag: "lab"      },
   { time: "16:00", title: "Review Vulkan kernel patches for Qwen3", tag: "research" },
-  { time: "19:00", title: "Flight: SFO → FRA (check disruption)", tag: "travel" },
+  { time: "19:00", title: "Flight: SFO → FRA (check disruption)",   tag: "travel"   },
 ];
 
-// ─── SVG WORLD MAP ───────────────────────────────────────────────────────────
-const WorldMapPaths = () => (
-  <g fill={T.bg3} stroke={T.accentDim} strokeWidth="0.3" opacity="0.6">
-    <path d="M80,62 L88,56 L100,50 L112,44 L128,40 L148,42 L160,50 L170,55 L178,64 L182,72 L186,82 L184,90 L178,98 L170,108 L164,118 L156,126 L148,132 L142,136 L136,140 L128,138 L122,130 L118,122 L112,114 L106,106 L100,96 L92,84 L84,72 Z" />
-    <path d="M112,114 L118,122 L128,138 L136,140 L142,148 L144,156 L140,162 L134,166 L128,162 L122,154 L118,146 L112,138 L108,130 L104,122 L106,116 Z" />
-    <path d="M68,44 L78,38 L90,36 L98,40 L100,50 L92,52 L82,50 L72,48 Z" />
-    <path d="M128,28 L140,24 L156,26 L168,30 L178,36 L182,44 L176,48 L164,46 L148,42 L136,38 Z" />
-    <path d="M196,24 L210,18 L222,22 L228,32 L224,44 L216,52 L206,54 L198,48 L194,38 L192,30 Z" />
-    <path d="M152,180 L162,172 L172,170 L182,176 L188,186 L192,198 L190,212 L186,226 L182,240 L178,252 L172,264 L166,274 L160,278 L154,272 L150,260 L148,246 L146,232 L144,218 L146,204 L148,192 Z" />
-    <path d="M268,52 L276,48 L288,44 L298,46 L308,50 L316,56 L322,64 L326,72 L322,80 L316,86 L308,90 L298,92 L288,88 L280,82 L274,74 L268,66 Z" />
-    <path d="M288,28 L296,24 L306,28 L312,36 L314,46 L308,50 L298,46 L292,38 L288,32 Z" />
-    <path d="M262,54 L268,48 L274,50 L276,58 L272,64 L266,66 L260,62 Z" />
-    <path d="M262,78 L272,74 L278,80 L276,88 L268,92 L260,88 L258,82 Z" />
-    <path d="M292,78 L296,74 L300,80 L298,90 L294,96 L290,92 L288,84 Z" />
-    <path d="M272,110 L282,104 L296,102 L312,104 L326,110 L336,120 L342,134 L344,150 L342,168 L338,184 L330,200 L320,212 L308,218 L296,220 L284,216 L274,206 L268,192 L264,176 L262,160 L262,144 L264,128 L268,118 Z" />
-    <path d="M326,82 L338,78 L350,82 L360,90 L364,100 L360,110 L352,116 L342,118 L334,112 L328,104 L324,94 Z" />
-    <path d="M334,112 L346,108 L356,114 L362,124 L358,136 L348,142 L338,138 L330,128 L328,118 Z" />
-    <path d="M322,40 L340,34 L362,30 L386,28 L410,30 L434,34 L454,40 L468,48 L476,56 L478,66 L472,74 L462,78 L448,76 L432,72 L414,68 L396,66 L378,64 L360,62 L344,58 L332,52 L326,46 Z" />
-    <path d="M376,96 L388,92 L400,96 L408,106 L410,118 L406,132 L398,144 L390,150 L382,146 L376,136 L372,124 L370,112 L372,102 Z" />
-    <path d="M414,58 L430,54 L446,58 L458,66 L464,76 L460,86 L452,94 L442,100 L430,104 L418,100 L408,94 L402,86 L400,78 L404,68 L410,62 Z" />
-    <path d="M418,114 L430,108 L442,112 L448,122 L444,132 L436,138 L426,136 L418,128 L414,120 Z" />
-    <path d="M420,156 L432,150 L446,152 L460,156 L472,162 L468,170 L456,174 L442,176 L428,172 L418,166 Z" />
-    <path d="M470,64 L476,58 L482,62 L484,72 L480,82 L474,86 L468,80 L466,70 Z" />
-    <path d="M434,200 L450,192 L468,190 L484,196 L496,206 L498,220 L492,234 L482,244 L468,248 L454,246 L442,238 L434,226 L432,212 Z" />
-    <path d="M510,244 L516,238 L520,246 L518,256 L512,260 L508,254 Z" />
-  </g>
-);
+// ─── (D3 map replaced by CesiumGlobe 3D globe — see CesiumGlobe.jsx) ─────────
 
-// ─── SUB-COMPONENTS ─────────────────────────────────────────────────────────
+// ─── LIVE DATA HOOK ──────────────────────────────────────────────────────────
+const API = "http://localhost:8000";
 
-const Pulse = ({ x, y, color = T.red, size = 6 }) => (
-  <g>
-    <circle cx={x} cy={y} r={size} fill={color} opacity="0.2">
-      <animate attributeName="r" values={`${size};${size * 3};${size}`} dur="2.5s" repeatCount="indefinite" />
-      <animate attributeName="opacity" values="0.3;0;0.3" dur="2.5s" repeatCount="indefinite" />
-    </circle>
-    <circle cx={x} cy={y} r={size * 0.5} fill={color} opacity="0.8" />
-  </g>
-);
+function useLiveData() {
+  const [flights,    setFlights]    = useState([]);
+  const [markets,    setMarkets]    = useState([]);
+  const [news,       setNews]       = useState([]);
+  const [dataStatus, setDataStatus] = useState({ flights: "loading", markets: "loading", news: "loading" });
 
-const FlightIcon = ({ x, y, hdg, type }) => {
-  const colors = { SURV: T.amber, MIL: T.red, COM: T.accentSoft, CARGO: T.cyan };
-  const c = colors[type] || T.textDim;
-  const angles = { NE: -45, S: 180, W: 270, N: 0, E: 90, SE: 135, SW: 225, NW: -45 };
-  const a = angles[hdg] || 0;
-  return (
-    <g transform={`translate(${x},${y}) rotate(${a})`}>
-      <polygon points="0,-5 3,4 0,2 -3,4" fill={c} opacity="0.9" />
-      <line x1="0" y1="2" x2="0" y2="14" stroke={c} strokeWidth="0.5" opacity="0.3" strokeDasharray="2,2" />
-    </g>
-  );
-};
+  const fetchFlights = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/flights`);
+      const d = await r.json();
+      if (d.flights) {
+        setFlights(d.flights);
+        setDataStatus(s => ({ ...s, flights: "ok" }));
+      }
+    } catch { setDataStatus(s => ({ ...s, flights: "error" })); }
+  }, []);
 
-const Panel = ({ title, children, style, icon, badge, onHeaderClick, collapsed = false }) => (
+  const fetchMarkets = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/markets`);
+      const d = await r.json();
+      if (d.markets?.length) {
+        setMarkets(d.markets);
+        setDataStatus(s => ({ ...s, markets: "ok" }));
+      }
+    } catch { setDataStatus(s => ({ ...s, markets: "error" })); }
+  }, []);
+
+  const fetchNews = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/news?limit=25`);
+      const d = await r.json();
+      if (d.articles?.length) {
+        setNews(d.articles);
+        setDataStatus(s => ({ ...s, news: "ok" }));
+      } else {
+        // GDELT error or empty response — surface an error state so UI doesn't
+        // stay stuck on "loading" forever; retain any articles already displayed
+        setDataStatus(s => ({ ...s, news: s.news === "ok" ? "ok" : "error" }));
+      }
+    } catch { setDataStatus(s => ({ ...s, news: s.news === "ok" ? "ok" : "error" })); }
+  }, []);
+
+  useEffect(() => {
+    fetchFlights(); fetchMarkets(); fetchNews();
+    const ti = setInterval(fetchFlights,  60_000);  // 60s — OpenSky anon quota is ~400 credits/day
+    const tm = setInterval(fetchMarkets,  30_000);
+    const tn = setInterval(fetchNews,     30_000);  // 30s — retry fast on GDELT errors
+    return () => { clearInterval(ti); clearInterval(tm); clearInterval(tn); };
+  }, [fetchFlights, fetchMarkets, fetchNews]);
+
+  return { flights, markets, news, dataStatus };
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function toneToLabel(tone) {
+  const t = parseFloat(tone) || 0;
+  if (t < -6) return { label: "BREAKING",   color: T.red        };
+  if (t < -3) return { label: "ESCALATING", color: T.amber      };
+  if (t < -1) return { label: "WATCH",      color: T.accentSoft };
+  if (t >  3) return { label: "POSITIVE",   color: T.green      };
+  return        { label: "SIGNAL",    color: T.textMuted  };
+}
+
+function gdeltAge(seendate) {
+  if (!seendate) return "";
+  try {
+    const iso = seendate.replace(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+      "$1-$2-$3T$4:$5:$6Z"
+    );
+    const mins = (Date.now() - new Date(iso).getTime()) / 60000;
+    if (mins < 1)    return "just now";
+    if (mins < 60)   return `${Math.floor(mins)}m ago`;
+    if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+    return `${Math.floor(mins / 1440)}d ago`;
+  } catch { return ""; }
+}
+
+function makeSparkData(sym, len = 12) {
+  let h = sym.split("").reduce((a, c) => (Math.imul(31, a) + c.charCodeAt(0)) | 0, 0x12345678);
+  const rand = () => { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return ((h >>> 0) / 0xffffffff) * 100; };
+  return Array.from({ length: len }, rand);
+}
+
+function riskColor(risk) {
+  return risk > 80 ? T.red : risk > 60 ? T.amber : T.accentSoft;
+}
+
+// ─── SUB-COMPONENTS ──────────────────────────────────────────────────────────
+
+const Panel = ({ title, children, style, icon, badge }) => (
   <div style={{
     background: `linear-gradient(135deg, ${T.bg1} 0%, ${T.bg0} 100%)`,
     border: `1px solid ${T.border}`,
@@ -142,41 +161,38 @@ const Panel = ({ title, children, style, icon, badge, onHeaderClick, collapsed =
     flexDirection: "column",
     ...style,
   }}>
-    <div
-      onClick={onHeaderClick}
-      style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "8px 12px",
-        background: T.accentGlow2,
-        borderBottom: `1px solid ${T.border}`,
-        cursor: onHeaderClick ? "pointer" : "default",
-        userSelect: "none",
-      }}
-    >
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "8px 12px",
+      background: T.accentGlow2,
+      borderBottom: `1px solid ${T.border}`,
+      userSelect: "none",
+      flexShrink: 0,
+    }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {icon && <span style={{ fontSize: 13, opacity: 0.7 }}>{icon}</span>}
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: T.accentSoft }}>{title}</span>
       </div>
       {badge && (
-        <span style={{
-          fontSize: 9, background: T.accent, color: "#fff", padding: "1px 6px",
-          borderRadius: 3, fontWeight: 700, letterSpacing: 1,
-        }}>{badge}</span>
+        <span style={{ fontSize: 9, background: T.accent, color: "#fff", padding: "1px 6px", borderRadius: 3, fontWeight: 700, letterSpacing: 1 }}>
+          {badge}
+        </span>
       )}
     </div>
-    {!collapsed && (
-      <div style={{ flex: 1, overflow: "auto", padding: "8px 10px", minHeight: 0 }}>
-        {children}
-      </div>
-    )}
+    <div style={{ flex: 1, overflow: "auto", padding: "8px 10px", minHeight: 0 }}>
+      {children}
+    </div>
   </div>
 );
 
 const Sparkline = ({ data, color, w = 60, h = 16 }) => {
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  if (!data?.length) return null;
+  const min   = Math.min(...data);
+  const max   = Math.max(...data);
   const range = max - min || 1;
-  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(" ");
+  const pts   = data.map((v, i) =>
+    `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`
+  ).join(" ");
   return (
     <svg width={w} height={h} style={{ display: "block" }}>
       <polyline points={pts} fill="none" stroke={color} strokeWidth="1.2" />
@@ -184,215 +200,61 @@ const Sparkline = ({ data, color, w = 60, h = 16 }) => {
   );
 };
 
-const genSparkData = (len = 12) => Array.from({ length: len }, () => Math.random() * 100);
+// HotspotDrawer lives inside CesiumGlobe.jsx (rendered as globe overlay)
 
-// MapView hoisted outside component — prevents remount on every clock tick
-const MapView = ({
-  flightsOnly = false,
-  mapLayer,
-  selectedHotspot,
-  setSelectedHotspot,
-  lngToX,
-  latToY,
-  instanceId = "a",
-}) => (
-  <div style={{ flex: 1, position: "relative", overflow: "hidden", background: T.bg0, minHeight: 0 }}>
-    <svg width="100%" height="100%" style={{ position: "absolute", top: 0, left: 0, opacity: 0.04 }}>
-      <defs>
-        <pattern id={`grid-${instanceId}`} width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke={T.accentSoft} strokeWidth="0.5" />
-        </pattern>
-      </defs>
-      <rect width="100%" height="100%" fill={`url(#grid-${instanceId})`} />
-    </svg>
+// ─── (MapView replaced by CesiumGlobe — see CesiumGlobe.jsx) ─────────────────
 
-    <svg viewBox="0 0 600 310" style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }} preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <radialGradient id={`glow-${instanceId}`} cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor={T.accent} stopOpacity="0.08" />
-          <stop offset="100%" stopColor={T.bg0} stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <rect width="600" height="310" fill={`url(#glow-${instanceId})`} />
-      <WorldMapPaths />
-
-      {[0, 30, 60, -30, -60].map(lat => (
-        <line key={`lat${lat}`} x1="20" y1={latToY(lat)} x2="580" y2={latToY(lat)}
-          stroke={T.accentDim} strokeWidth="0.2" opacity="0.2" strokeDasharray="4,8" />
-      ))}
-      {[0, 60, 120, -60, -120, 180].map(lng => (
-        <line key={`lng${lng}`} x1={lngToX(lng)} y1="5" x2={lngToX(lng)} y2="305"
-          stroke={T.accentDim} strokeWidth="0.2" opacity="0.2" strokeDasharray="4,8" />
-      ))}
-
-      {!flightsOnly && (mapLayer === "hotspots" || mapLayer === "flights") && HOTSPOTS.map(h => (
-        <g key={h.id} style={{ cursor: "pointer" }} onClick={() => setSelectedHotspot(selectedHotspot?.id === h.id ? null : h)}>
-          <Pulse x={lngToX(h.lng)} y={latToY(h.lat)}
-            color={h.risk > 80 ? T.red : h.risk > 60 ? T.amber : T.accentSoft}
-            size={h.risk > 80 ? 5 : 4} />
-          <text x={lngToX(h.lng)} y={latToY(h.lat) - 10}
-            fill={T.textDim} fontSize="5.5" textAnchor="middle" fontFamily="'JetBrains Mono', monospace"
-            fontWeight="600" letterSpacing="0.5">{h.name}</text>
-        </g>
-      ))}
-
-      {(flightsOnly || mapLayer === "flights" || mapLayer === "hotspots") && FLIGHTS.map(f => (
-        <g key={f.id}>
-          <FlightIcon x={lngToX(f.lng)} y={latToY(f.lat)} hdg={f.hdg} type={f.type} />
-          <text x={lngToX(f.lng) + 6} y={latToY(f.lat) - 2}
-            fill={T.textMuted} fontSize="4.5" fontFamily="'JetBrains Mono', monospace">{f.call}</text>
-        </g>
-      ))}
-
-      {!flightsOnly && (
-        <>
-          <line x1={lngToX(43)} y1={latToY(13.5)} x2={lngToX(56.5)} y2={latToY(26.5)}
-            stroke={T.red} strokeWidth="0.4" opacity="0.2" strokeDasharray="3,4" />
-          <line x1={lngToX(119)} y1={latToY(24.5)} x2={lngToX(115)} y2={latToY(11)}
-            stroke={T.amber} strokeWidth="0.4" opacity="0.2" strokeDasharray="3,4" />
-        </>
-      )}
-    </svg>
-
-    {["shipping", "weather", "sanctions", "infra"].includes(mapLayer) && !flightsOnly && (
-      <div style={{
-        position: "absolute", top: "50%", left: "50%",
-        transform: "translate(-50%, -50%)",
-        background: `${T.bg2}cc`, border: `1px solid ${T.border}`,
-        borderRadius: 6, padding: "10px 20px", textAlign: "center",
-        pointerEvents: "none", backdropFilter: "blur(4px)",
-      }}>
-        <div style={{ fontSize: 10, color: T.accentSoft, letterSpacing: 2, fontWeight: 700 }}>
-          {mapLayer.toUpperCase()} LAYER
-        </div>
-        <div style={{ fontSize: 9, color: T.textMuted, marginTop: 4, letterSpacing: 1 }}>
-          DATA INTEGRATION — SESSION 04
-        </div>
-      </div>
-    )}
-
-    {selectedHotspot && !flightsOnly && (
-      <div style={{
-        position: "absolute", top: 12, right: 12, width: 280,
-        background: `linear-gradient(135deg, ${T.bg2}ee, ${T.bg1}ee)`,
-        backdropFilter: "blur(12px)",
-        border: `1px solid ${T.borderActive}`,
-        borderRadius: 6, padding: 14, zIndex: 10,
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 10 }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{selectedHotspot.name}</div>
-            <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, marginTop: 2, textTransform: "uppercase" }}>{selectedHotspot.type}</div>
-          </div>
-          <div style={{
-            background: selectedHotspot.risk > 80 ? "rgba(248,113,113,0.2)" : "rgba(251,191,36,0.2)",
-            border: `1px solid ${selectedHotspot.risk > 80 ? T.red : T.amber}`,
-            padding: "2px 8px", borderRadius: 3, fontSize: 11, fontWeight: 700,
-            color: selectedHotspot.risk > 80 ? T.red : T.amber,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>{selectedHotspot.risk}</div>
-        </div>
-
-        <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.5, marginBottom: 10 }}>
-          Active monitoring zone. AI-detected signal convergence across military, economic, and logistical domains. {selectedHotspot.risk > 80 ? "Elevated threat posture — recommend continuous monitoring." : "Moderate activity — standard watch protocol."}
-        </div>
-
-        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 8 }}>
-          <div style={{ fontSize: 8, letterSpacing: 1, color: T.textMuted, marginBottom: 6, fontWeight: 600 }}>RELATED SIGNALS</div>
-          {NEWS_ITEMS.filter(n => n.severity >= 4).slice(0, 3).map((n, i) => (
-            <div key={i} style={{ fontSize: 9, color: T.textDim, padding: "3px 0", borderBottom: `1px solid ${T.border}` }}>
-              <span style={{ color: n.color, fontSize: 7, fontWeight: 700, marginRight: 4 }}>●</span>
-              {n.title.slice(0, 70)}…
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-          {["DOSSIER", "WATCHLIST", "ALERT"].map(a => (
-            <button key={a} type="button" style={{
-              flex: 1, padding: "4px 0", border: `1px solid ${T.border}`, borderRadius: 3,
-              background: "transparent", color: T.accentSoft, fontSize: 8, letterSpacing: 1,
-              fontWeight: 600, cursor: "pointer",
-            }}>{a}</button>
-          ))}
-        </div>
-
-        <button type="button" onClick={() => setSelectedHotspot(null)} style={{
-          position: "absolute", top: 8, right: 8, background: "none", border: "none",
-          color: T.textMuted, fontSize: 14, cursor: "pointer", padding: 4,
-        }}>×</button>
-      </div>
-    )}
-
-    {!flightsOnly && (
-      <div style={{
-        position: "absolute", bottom: 0, left: 0, right: 0,
-        background: `linear-gradient(transparent, ${T.bg0}dd)`,
-        padding: "20px 16px 8px",
-        display: "flex", justifyContent: "space-between", alignItems: "end",
-      }}>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          {HOTSPOTS.slice(0, 4).map(h => (
-            <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{
-                width: 6, height: 6, borderRadius: "50%",
-                background: h.risk > 80 ? T.red : h.risk > 60 ? T.amber : T.green,
-                boxShadow: `0 0 4px ${h.risk > 80 ? T.red : h.risk > 60 ? T.amber : T.green}`,
-              }} />
-              <span style={{ fontSize: 9, color: T.textDim, letterSpacing: 0.5 }}>{h.name}</span>
-              <span style={{
-                fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
-                color: h.risk > 80 ? T.red : h.risk > 60 ? T.amber : T.green,
-              }}>{h.risk}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: 8, color: T.textMuted, letterSpacing: 1 }}>
-          GEOSPATIAL ENGINE v0.1 • PROJECTION: EQUIRECTANGULAR • REFRESH: 30s
-        </div>
-      </div>
-    )}
-  </div>
-);
-
-// ─── MAIN APP ───────────────────────────────────────────────────────────────
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function GDLETNexus() {
-  const [activeView, setActiveView] = useState("command");
-  const [selectedHotspot, setSelectedHotspot] = useState(null);
-  const [copilotOpen, setCopilotOpen] = useState(false);
-  const [copilotInput, setCopilotInput] = useState("");
-  const [copilotLoading, setCopilotLoading] = useState(false);
-  const [copilotMessages, setCopilotMessages] = useState([
-    { role: "nexus", text: "NEXUS online. All modules nominal. Monitoring 147 global feeds across 42 languages. 3 active threat corridors detected. Ready for tasking." }
+
+  // Core state
+  const [activeView,       setActiveView]       = useState("command");
+  const [selectedHotspot,  setSelectedHotspot]  = useState(null);
+  const [mapLayer,         setMapLayer]          = useState("hotspots");
+  const [clock,            setClock]             = useState(new Date());
+  const [showResearchMsg,  setShowResearchMsg]   = useState(false);
+
+  // Copilot state
+  const [copilotOpen,      setCopilotOpen]      = useState(false);
+  const [copilotInput,     setCopilotInput]     = useState("");
+  const [copilotLoading,   setCopilotLoading]   = useState(false);
+  const [copilotMessages,  setCopilotMessages]  = useState([
+    { role: "nexus", text: "NEXUS online. Cesium 3D globe active. Live data streams: OpenSky + ADS-B Exchange, Yahoo Finance, GDELT 2.0. All modules nominal. Ready for tasking." },
   ]);
-  const [clock, setClock] = useState(new Date());
-  const [newsFilter, setNewsFilter] = useState("ALL");
+
+  // News filter state — sidebar and center view independent
+  const [newsFilter,       setNewsFilter]       = useState("ALL");
   const [centerNewsFilter, setCenterNewsFilter] = useState("ALL");
-  const [mapLayer, setMapLayer] = useState("hotspots");
-  const [showResearchMsg, setShowResearchMsg] = useState(false);
-  const [apiStatus, setApiStatus] = useState("CHECKING");
-  const [loadedModel, setLoadedModel] = useState("—");
 
-  // ── Session 04 additions ─────────────────────────────────────────────────
-  const wsRef = useRef(null);
-  const [wsStatus, setWsStatus] = useState("CONNECTING");
-  const [voiceActive, setVoiceActive] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState("IDLE");
+  // API + voice state (Session 04)
+  const [apiStatus,        setApiStatus]        = useState("CHECKING");
+  const [loadedModel,      setLoadedModel]      = useState("—");
+  const [wsStatus,         setWsStatus]         = useState("DISCONNECTED");
+  const [voiceActive,      setVoiceActive]      = useState(false);
+  const [voiceStatus,      setVoiceStatus]      = useState("IDLE");
 
-  const copilotRef = useRef(null);
+  // Refs
+  const copilotRef        = useRef(null);
   const copilotLoadingRef = useRef(false);
+  const wsRef             = useRef(null);
 
-  const sparkData = useMemo(() =>
-    Object.fromEntries(MARKETS.map(m => [m.sym, genSparkData()])),
-  []);
+  // Live data from FastAPI
+  const { flights, markets, news, dataStatus } = useLiveData();
 
-  // Load Google Fonts
+  // Stable sparkline data per market symbol
+  const sparkData = useMemo(() => {
+    const out = {};
+    markets.forEach(m => { out[m.sym] = makeSparkData(m.sym); });
+    return out;
+  }, [markets.map(m => m.sym).join(",")]);  // eslint-disable-line
+
+  // Google Fonts
   useEffect(() => {
     const link = document.createElement("link");
     link.href = "https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap";
-    link.rel = "stylesheet";
+    link.rel  = "stylesheet";
     document.head.appendChild(link);
-    return () => { document.head.removeChild(link); };
+    return () => document.head.removeChild(link);
   }, []);
 
   // Clock
@@ -401,15 +263,16 @@ export default function GDLETNexus() {
     return () => clearInterval(t);
   }, []);
 
-  // Reset transient state on view navigation
+  // Navigation cleanup
   useEffect(() => {
     if (activeView !== "research") setShowResearchMsg(false);
-    if (activeView !== "command") setSelectedHotspot(null);
+    if (activeView !== "command")  setSelectedHotspot(null);
   }, [activeView]);
 
-  // Auto-scroll copilot
+  // Copilot auto-scroll
   useEffect(() => {
-    if (copilotRef.current) copilotRef.current.scrollTop = copilotRef.current.scrollHeight;
+    if (copilotRef.current)
+      copilotRef.current.scrollTop = copilotRef.current.scrollHeight;
   }, [copilotMessages, copilotLoading]);
 
   // Keyboard shortcuts
@@ -428,241 +291,214 @@ export default function GDLETNexus() {
     return () => window.removeEventListener("keydown", handler);
   }, [copilotOpen]);
 
-  // ── NEXUS API status poll (port 8000, not 1234 directly) ─────────────────
+  // WebSocket to FastAPI bridge (Session 04)
   useEffect(() => {
-    const fetchStatus = () => {
-      fetch("http://localhost:8000/status")
-        .then(r => r.json())
-        .then(data => {
-          setApiStatus(data.lm_studio);
-          setLoadedModel(data.loaded_model);
-        })
-        .catch(() => {
-          setApiStatus("OFFLINE");
-          setLoadedModel("—");
-        });
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    let reconnectTimer = null;
 
-  // ── WebSocket connection to NEXUS API ─────────────────────────────────────
-  useEffect(() => {
-    const connect = () => {
+    function connect() {
       const ws = new WebSocket("ws://localhost:8000/ws");
       wsRef.current = ws;
 
-      ws.onopen = () => {
-        setWsStatus("CONNECTED");
-      };
+      ws.onopen = () => setWsStatus("CONNECTED");
 
       ws.onmessage = (event) => {
-        let msg;
-        try { msg = JSON.parse(event.data); } catch { return; }
-
-        switch (msg.type) {
-          case "nexus_response":
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "nexus_response") {
+            const prefix   = msg.source === "voice" ? "🎙 " : "";
+            const verified = msg.verified ? "✓ VERIFIED  " : "";
             setCopilotMessages(prev => [...prev, {
               role: "nexus",
-              text: msg.text,
-              verified: msg.verified,
-              confidence: msg.confidence,
-              source: msg.source,
+              text: `${verified}${prefix}${msg.text}`,
             }]);
             copilotLoadingRef.current = false;
             setCopilotLoading(false);
-            setVoiceStatus(voiceActive ? "LISTENING" : "IDLE");
-            break;
-
-          case "voice_transcript":
-            setCopilotMessages(prev => [...prev, {
-              role: "user",
-              text: msg.text,
-              source: "voice",
-            }]);
-            copilotLoadingRef.current = true;
-            setCopilotLoading(true);
-            setVoiceStatus("PROCESSING");
-            setCopilotOpen(true);
-            break;
-
-          case "processing_start":
-            copilotLoadingRef.current = true;
-            setCopilotLoading(true);
-            break;
-
-          case "voice_status":
+          } else if (msg.type === "voice_status") {
             setVoiceStatus(msg.status);
-            if (msg.status === "IDLE") setVoiceActive(false);
-            break;
-
-          case "pong":
-            break;
-
-          default:
-            break;
-        }
+          } else if (msg.type === "voice_transcript") {
+            setCopilotMessages(prev => [...prev, { role: "user", text: `🎙 ${msg.text}` }]);
+          }
+        } catch { /* malformed frame */ }
       };
 
       ws.onclose = () => {
         setWsStatus("DISCONNECTED");
-        setTimeout(connect, 3000);
+        reconnectTimer = setTimeout(connect, 3000);
       };
 
       ws.onerror = () => {
-        setWsStatus("DISCONNECTED");
+        ws.close();
+        setWsStatus("ERROR");
       };
-    };
+    }
 
     connect();
-    return () => { if (wsRef.current) wsRef.current.close(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => {
+      clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
+  }, []);
 
-  // ── Send text message via WebSocket (falls back to REST) ─────────────────
+  // API status poll
+  useEffect(() => {
+    const poll = () => {
+      fetch(`${API}/status`)
+        .then(r => r.json())
+        .then(d => {
+          setApiStatus(d.lm_studio === "online" ? "ONLINE" : "DEGRADED");
+          setLoadedModel(d.model_loaded ?? "—");
+        })
+        .catch(() => { setApiStatus("OFFLINE"); setLoadedModel("—"); });
+    };
+    poll();
+    const t = setInterval(poll, 15_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Send copilot message — WebSocket first, REST fallback
   const sendCopilot = useCallback(async () => {
     if (!copilotInput.trim() || copilotLoadingRef.current) return;
     const userMsg = copilotInput.trim();
 
-    setCopilotMessages(prev => [...prev, { role: "user", text: userMsg, source: "text" }]);
+    const history = copilotMessages
+      .filter(m => m.role === "user" || m.role === "nexus")
+      .slice(-10)
+      .map(m => ({ role: m.role === "nexus" ? "assistant" : "user", content: m.text }));
+
+    setCopilotMessages(prev => [...prev, { role: "user", text: userMsg }]);
     setCopilotInput("");
     copilotLoadingRef.current = true;
     setCopilotLoading(true);
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "text_chat", text: userMsg }));
-    } else {
-      try {
-        const res = await fetch("http://localhost:8000/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: userMsg }),
-        });
-        const data = await res.json();
-        setCopilotMessages(prev => [...prev, { role: "nexus", text: data.response }]);
-      } catch {
-        setCopilotMessages(prev => [...prev, {
-          role: "nexus",
-          text: "[ERROR] Cannot reach NEXUS API at localhost:8000. Run: python3 -m api.server",
-        }]);
-      } finally {
-        copilotLoadingRef.current = false;
-        setCopilotLoading(false);
-      }
+      return;
     }
-  }, [copilotInput]);
 
-  // ── Toggle voice input ────────────────────────────────────────────────────
-  const toggleVoice = useCallback(() => {
-    const newState = !voiceActive;
-    setVoiceActive(newState);
-    if (!newState) setVoiceStatus("IDLE");
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "voice_toggle", active: newState }));
+    try {
+      const r = await fetch(`${API}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: userMsg, history }),
+      });
+      const d = await r.json();
+      setCopilotMessages(prev => [...prev, { role: "nexus", text: d.response ?? "[No response]" }]);
+    } catch {
+      setCopilotMessages(prev => [...prev, {
+        role: "nexus",
+        text: "[ERROR] Cannot reach NEXUS API at localhost:8000. Verify FastAPI bridge is running.",
+      }]);
+    } finally {
+      copilotLoadingRef.current = false;
+      setCopilotLoading(false);
     }
+  }, [copilotInput, copilotMessages]);
+
+  // Voice toggle
+  const toggleVoice = useCallback(() => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    const next = !voiceActive;
+    setVoiceActive(next);
+    wsRef.current.send(JSON.stringify({ type: "voice_toggle", active: next }));
+    if (!next) setVoiceStatus("IDLE");
   }, [voiceActive]);
 
-  // Stable map projection callbacks
-  const lngToX = useCallback((lng) => ((lng + 180) / 360) * 560 + 20, []);
-  const latToY = useCallback((lat) => ((90 - lat) / 180) * 300 + 5, []);
+  // Derived display values
+  const utc     = clock.toISOString().slice(11, 19);
+  const dateStr = clock.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const apiColor = apiStatus === "ONLINE" ? T.green : apiStatus === "OFFLINE" ? T.red : T.amber;
+  const wsColor  = wsStatus  === "CONNECTED" ? T.green : wsStatus === "ERROR" ? T.red : T.amber;
+  const riskIndex = 73;
 
-  const filteredNews = newsFilter === "ALL" ? NEWS_ITEMS : NEWS_ITEMS.filter(n => n.label === newsFilter);
-  const centerFilteredNews = centerNewsFilter === "ALL" ? NEWS_ITEMS : NEWS_ITEMS.filter(n => n.label === centerNewsFilter);
+  const NEWS_LABELS = ["ALL", "BREAKING", "ESCALATING", "WATCH", "POSITIVE", "SIGNAL"];
+
+  function filterNews(articles, filter) {
+    if (filter === "ALL") return articles;
+    return articles.filter(a => toneToLabel(a.tone).label === filter);
+  }
+
+  const filteredNews       = filterNews(news, newsFilter);
+  const centerFilteredNews = filterNews(news, centerNewsFilter);
 
   const navItems = [
-    { id: "command", icon: "◉", label: "CMD" },
-    { id: "news", icon: "▤", label: "FEED" },
-    { id: "markets", icon: "◈", label: "MKT" },
-    { id: "flights", icon: "△", label: "AIR" },
-    { id: "research", icon: "◇", label: "LAB" },
-    { id: "daily", icon: "☰", label: "DAY" },
+    { id: "command",  icon: "◈", label: "CMD"  },
+    { id: "news",     icon: "◉", label: "FEED" },
+    { id: "markets",  icon: "◎", label: "MKT"  },
+    { id: "flights",  icon: "△", label: "AIR"  },
+    { id: "research", icon: "◇", label: "LAB"  },
+    { id: "daily",    icon: "◷", label: "DAY"  },
   ];
 
-  const riskIndex = 73;
-  const utc = clock.toISOString().slice(11, 19);
-  const dateStr = clock.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-  const apiStatusColor = apiStatus === "ONLINE" ? T.green : apiStatus === "OFFLINE" ? T.red : T.amber;
-
-  // ─── VIEW SWITCHING ───────────────────────────────────────────────────────
+  // ─── VIEW RENDERING ──────────────────────────────────────────────────────────
   const renderCenter = () => {
     switch (activeView) {
 
       case "command":
-        return (
-          <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
-            <div style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
-              background: T.bg1, borderBottom: `1px solid ${T.border}`, flexWrap: "wrap",
-            }}>
-              {["hotspots", "flights", "shipping", "weather", "sanctions", "infra"].map(l => (
-                <button key={l} type="button" className="nexus-layer-btn" onClick={() => setMapLayer(l)}
-                  style={{
-                    padding: "3px 10px", border: `1px solid ${mapLayer === l ? T.accent : T.border}`,
-                    borderRadius: 3, fontSize: 9, letterSpacing: 1, fontWeight: 600,
-                    textTransform: "uppercase", cursor: "pointer",
-                    background: mapLayer === l ? T.accentGlow : "transparent",
-                    color: mapLayer === l ? T.accentBright : T.textMuted,
-                    transition: "all 0.15s",
-                  }}>{l}</button>
-              ))}
-              <div style={{ flex: 1 }} />
-              <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>
-                LAYER: {mapLayer.toUpperCase()} • {HOTSPOTS.length} NODES • {FLIGHTS.length} TRACKED
-              </span>
-            </div>
-            <MapView
-              instanceId="cmd"
-              mapLayer={mapLayer}
-              selectedHotspot={selectedHotspot}
-              setSelectedHotspot={setSelectedHotspot}
-              lngToX={lngToX}
-              latToY={latToY}
-            />
-          </div>
-        );
+        return null; // globe + layer strip rendered directly in centre layout below
 
       case "news":
         return (
           <div style={{ flex: 1, overflow: "auto", padding: 16, minHeight: 0 }}>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, color: T.accentSoft }}>LIVE INTELLIGENCE FEED</div>
-              <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, marginTop: 2 }}>{NEWS_ITEMS.length} SIGNALS ACROSS 42 LANGUAGES • REAL-TIME</div>
+              <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, marginTop: 2 }}>
+                {dataStatus.news === "ok"
+                  ? `${news.length} SIGNALS • GDELT 2.0 • MULTI-LANGUAGE • REFRESH: 2MIN`
+                  : "FETCHING FROM GDELT 2.0…"}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-              {["ALL", "BREAKING", "MARKET-MOVING", "ESCALATING", "INFRASTRUCTURE", "EMERGING", "WATCH", "TRAVEL IMPACT"].map(f => (
+
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+              {NEWS_LABELS.map(f => (
                 <button key={f} type="button" onClick={() => setCenterNewsFilter(f)} style={{
-                  padding: "4px 12px", border: `1px solid ${centerNewsFilter === f ? T.accent : T.border}`,
+                  padding: "4px 12px",
+                  border: `1px solid ${centerNewsFilter === f ? T.accent : T.border}`,
                   borderRadius: 3, fontSize: 9, letterSpacing: 1, fontWeight: 600, cursor: "pointer",
                   background: centerNewsFilter === f ? T.accentGlow : "transparent",
                   color: centerNewsFilter === f ? T.accentBright : T.textMuted,
+                  fontFamily: "inherit",
                 }}>{f}</button>
               ))}
             </div>
+
+            {centerFilteredNews.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 0", color: T.textMuted, fontSize: 11 }}>
+                {dataStatus.news === "loading" ? "Fetching live signals…" :
+                 dataStatus.news === "error"   ? "GDELT unavailable — retrying in 30s…" :
+                 "No articles match this filter."}
+              </div>
+            )}
+
             <div style={{ display: "grid", gap: 8 }}>
-              {centerFilteredNews.map(n => (
-                <div key={n.id} style={{
-                  padding: "12px 14px", borderRadius: 6,
-                  background: T.accentGlow2, border: `1px solid ${T.border}`,
-                  cursor: "pointer", transition: "border-color 0.15s",
-                }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: 1, color: n.color, background: `${n.color}15`, padding: "2px 8px", borderRadius: 3 }}>{n.label}</span>
-                      <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 0.5 }}>{n.region}</span>
+              {centerFilteredNews.map((n, i) => {
+                const { label, color } = toneToLabel(n.tone);
+                const age = gdeltAge(n.seendate);
+                return (
+                  <div key={i}
+                    style={{
+                      padding: "12px 14px", borderRadius: 6,
+                      background: T.accentGlow2, border: `1px solid ${T.border}`,
+                      cursor: "pointer", transition: "border-color 0.15s",
+                    }}
+                    onClick={() => n.url && window.open(n.url, "_blank")}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{
+                          fontSize: 8, fontWeight: 800, letterSpacing: 1,
+                          color, background: `${color}18`, padding: "2px 8px", borderRadius: 3,
+                        }}>{label}</span>
+                        <span style={{ fontSize: 9, color: T.textMuted }}>{n.sourcecountry || n.domain}</span>
+                      </div>
+                      <span style={{ fontSize: 9, color: T.textMuted }}>{age}</span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      {Array.from({ length: n.severity }).map((_, i) => (
-                        <div key={i} style={{ width: 4, height: 4, borderRadius: "50%", background: n.severity >= 4 ? T.red : T.amber }} />
-                      ))}
-                      <span style={{ fontSize: 9, color: T.textMuted }}>{n.time}</span>
-                    </div>
+                    <div style={{ fontSize: 12, color: T.text, lineHeight: 1.5, fontWeight: 500 }}>{n.title}</div>
+                    <div style={{ fontSize: 8, color: T.textMuted, marginTop: 4 }}>{n.domain}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: T.text, lineHeight: 1.5, fontWeight: 500 }}>{n.title}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
@@ -670,16 +506,28 @@ export default function GDLETNexus() {
       case "markets":
         return (
           <div style={{ flex: 1, overflow: "auto", padding: 16, minHeight: 0 }}>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, color: T.accentSoft }}>MARKETS INTELLIGENCE</div>
-              <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, marginTop: 2 }}>CROSS-DOMAIN MACRO REASONING ENGINE • LIVE</div>
+              <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, marginTop: 2 }}>
+                {dataStatus.markets === "ok"
+                  ? `${markets.length} INSTRUMENTS • YAHOO FINANCE • REFRESH: 30S`
+                  : "FETCHING LIVE PRICES…"}
+              </div>
             </div>
+
+            {markets.length === 0 && (
+              <div style={{ textAlign: "center", padding: "40px 0", color: T.textMuted, fontSize: 11 }}>
+                {dataStatus.markets === "loading" ? "Fetching live prices…" : "No market data available."}
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8, marginBottom: 16 }}>
-              {MARKETS.map(m => (
-                <div key={m.sym} style={{
-                  padding: "12px 14px", background: T.accentGlow2, borderRadius: 6,
-                  border: `1px solid ${T.border}`, transition: "border-color 0.15s",
-                }}
+              {markets.map(m => (
+                <div key={m.sym}
+                  style={{
+                    padding: "12px 14px", background: T.accentGlow2, borderRadius: 6,
+                    border: `1px solid ${T.border}`, transition: "border-color 0.15s",
+                  }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
                   onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
                 >
@@ -688,67 +536,25 @@ export default function GDLETNexus() {
                       <span style={{ fontSize: 11, fontWeight: 700, color: T.accentSoft, letterSpacing: 1 }}>{m.sym}</span>
                       <span style={{ fontSize: 9, color: T.textMuted, marginLeft: 8 }}>{m.name}</span>
                     </div>
-                    <Sparkline data={sparkData[m.sym]} color={m.up ? T.green : T.red} w={50} h={16} />
+                    <Sparkline data={sparkData[m.sym] || makeSparkData(m.sym)} color={m.up ? T.green : T.red} w={50} h={16} />
                   </div>
                   <div style={{ fontSize: 16, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.text }}>{m.val}</div>
                   <div style={{ fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: m.up ? T.green : T.red, marginTop: 2 }}>{m.chg}</div>
                 </div>
               ))}
             </div>
+
             <div style={{ padding: "12px 14px", background: "rgba(248,113,113,0.06)", border: `1px solid rgba(248,113,113,0.15)`, borderRadius: 6 }}>
               <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: T.amber, marginBottom: 4 }}>AI CROSS-DOMAIN INSIGHT</div>
               <div style={{ fontSize: 11, color: T.textDim, lineHeight: 1.6 }}>
-                Brent +3.14% correlates with Red Sea vessel diversions. VIX elevated — ECB signaling driving EUR vol. Semiconductor names may gap on TSMC yield news. Oil-sensitive airline exposure warrants monitoring ahead of SFO→FRA departure.
+                Live market data loaded from Yahoo Finance. Cross-domain analysis available via NEXUS Copilot — ask about correlations between commodity prices, geopolitical hotspots, and equity exposure.
               </div>
             </div>
           </div>
         );
 
       case "flights":
-        return (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-            <div style={{ padding: "8px 12px", background: T.bg1, borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: T.accentSoft }}>FLIGHT INTELLIGENCE — TRACKED AIRCRAFT</div>
-              <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>{FLIGHTS.length} ACTIVE</span>
-            </div>
-            <MapView
-              instanceId="air"
-              flightsOnly
-              mapLayer={mapLayer}
-              selectedHotspot={selectedHotspot}
-              setSelectedHotspot={setSelectedHotspot}
-              lngToX={lngToX}
-              latToY={latToY}
-            />
-            <div style={{ background: T.bg1, borderTop: `1px solid ${T.border}`, padding: "8px 12px", maxHeight: 160, overflow: "auto", flexShrink: 0 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                    {["CALLSIGN", "TYPE", "ALT", "HDG", "STATUS"].map(h => (
-                      <th key={h} style={{ padding: "4px 8px", textAlign: "left", fontSize: 8, fontWeight: 700, letterSpacing: 1, color: T.textMuted }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {FLIGHTS.map(f => {
-                    const tc = { SURV: T.amber, MIL: T.red, COM: T.accentSoft, CARGO: T.cyan };
-                    return (
-                      <tr key={f.id} style={{ borderBottom: `1px solid ${T.border}` }}>
-                        <td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.text }}>{f.call}</td>
-                        <td style={{ padding: "6px 8px" }}>
-                          <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: tc[f.type], background: `${tc[f.type]}15`, padding: "1px 6px", borderRadius: 2 }}>{f.type}</span>
-                        </td>
-                        <td style={{ padding: "6px 8px", fontFamily: "'JetBrains Mono', monospace", color: T.textDim }}>{f.alt}</td>
-                        <td style={{ padding: "6px 8px", color: T.textDim }}>{f.hdg}</td>
-                        <td style={{ padding: "6px 8px", fontSize: 9, color: T.textDim }}>{f.note}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
+        return null; // globe rendered directly in centre layout; table below
 
       case "research":
         return (
@@ -757,13 +563,11 @@ export default function GDLETNexus() {
               <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.3 }}>◇</div>
               <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 3, color: T.accentSoft, marginBottom: 8 }}>LAB WORKSPACE</div>
               <div style={{ fontSize: 10, color: T.textMuted, lineHeight: 1.6, letterSpacing: 0.5, marginBottom: 20 }}>
-                Research workspace, dossier builder, and knowledge synthesis engine. Notes, saved searches, entity graphs, and AI-generated briefs.
+                Research workspace, dossier builder, and knowledge synthesis engine.
               </div>
               <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
                 {["MORNING BRIEF", "THREAT BRIEF", "COUNTRY DOSSIER", "TRIP BRIEF"].map(t => (
-                  <button
-                    key={t}
-                    type="button"
+                  <button key={t} type="button"
                     onClick={() => setShowResearchMsg(true)}
                     onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
                     onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
@@ -781,7 +585,7 @@ export default function GDLETNexus() {
                   background: T.accentGlow2, border: `1px solid ${T.borderActive}`,
                   borderRadius: 4, fontSize: 9, color: T.accentSoft, letterSpacing: 1,
                 }}>
-                  Coming in Session 04 — research workspace in development
+                  Coming in Session 05 — research workspace in development
                 </div>
               )}
               <div style={{ marginTop: 24, fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>COMING IN SESSION 05</div>
@@ -794,7 +598,8 @@ export default function GDLETNexus() {
           <div style={{ flex: 1, overflow: "auto", padding: 16, minHeight: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, color: T.accentSoft, marginBottom: 16 }}>DAILY OPERATIONS</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Panel title="SCHEDULE" icon="☰" badge={`${AGENDA.length}`} style={{ gridColumn: "1 / -1" }}>
+
+              <Panel title="SCHEDULE" icon="◷" badge={`${AGENDA.length}`} style={{ gridColumn: "1 / -1" }}>
                 {AGENDA.map((a, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
                     <span style={{ fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.accentSoft, minWidth: 48 }}>{a.time}</span>
@@ -802,34 +607,38 @@ export default function GDLETNexus() {
                     <span style={{
                       fontSize: 8, letterSpacing: 1, padding: "2px 8px", borderRadius: 3,
                       background: a.tag === "travel" ? "rgba(248,113,113,0.15)" : T.accentGlow2,
-                      color: a.tag === "travel" ? T.amber : T.textMuted, fontWeight: 600, textTransform: "uppercase",
+                      color: a.tag === "travel" ? T.amber : T.textMuted,
+                      fontWeight: 600, textTransform: "uppercase",
                     }}>{a.tag}</span>
                   </div>
                 ))}
               </Panel>
-              <Panel title="WEATHER" icon="☁" badge="LOCAL">
+
+              <Panel title="WEATHER" icon="◈" badge="LOCAL">
                 <div style={{ textAlign: "center", padding: "12px 0" }}>
                   <div style={{ fontSize: 28, fontWeight: 300, fontFamily: "'JetBrains Mono', monospace", color: T.text }}>72°F</div>
                   <div style={{ fontSize: 10, color: T.textDim, marginTop: 4 }}>Livermore, CA — Clear</div>
                   <div style={{ fontSize: 9, color: T.textMuted, marginTop: 8, lineHeight: 1.5 }}>Hi 78° / Lo 54° • Wind 8 mph NW • UV 6</div>
+                  <div style={{ fontSize: 8, color: T.textMuted, marginTop: 6, letterSpacing: 1 }}>LIVE WEATHER — SESSION 05</div>
                 </div>
               </Panel>
-              <Panel title="NEXUS STATUS" icon="◉">
+
+              <Panel title="NEXUS STATUS" icon="◎">
                 <div style={{ display: "grid", gap: 8 }}>
                   {[
-                    { label: "MODEL LOADED", value: loadedModel, color: apiStatusColor },
-                    { label: "LM STUDIO", value: apiStatus, color: apiStatusColor },
-                    { label: "API BRIDGE", value: wsStatus === "CONNECTED" ? "ONLINE" : "OFFLINE", color: wsStatus === "CONNECTED" ? T.green : T.red },
-                    { label: "VOICE", value: voiceActive ? voiceStatus : "IDLE", color: voiceActive ? T.accentSoft : T.textMuted },
-                    { label: "FEEDS ACTIVE", value: "147", color: T.accentSoft },
-                    { label: "ALERTS PENDING", value: "3", color: T.amber },
+                    { label: "MODEL LOADED", value: loadedModel,              color: apiColor  },
+                    { label: "API BRIDGE",   value: apiStatus,               color: apiColor  },
+                    { label: "WEBSOCKET",    value: wsStatus,                color: wsColor   },
+                    { label: "VOICE",        value: voiceActive ? `ACTIVE — ${voiceStatus}` : "STANDBY", color: voiceActive ? T.green : T.textDim },
+                    { label: "ADS-B",        value: dataStatus.flights === "ok" ? `${flights.length} TRACKED` : dataStatus.flights.toUpperCase(), color: dataStatus.flights === "ok" ? T.green : T.amber },
+                    { label: "MARKETS",      value: dataStatus.markets === "ok" ? `${markets.length} INSTRUMENTS` : dataStatus.markets.toUpperCase(), color: dataStatus.markets === "ok" ? T.green : T.amber },
+                    { label: "NEWS FEED",    value: dataStatus.news === "ok" ? `${news.length} ARTICLES` : dataStatus.news.toUpperCase(), color: dataStatus.news === "ok" ? T.green : T.amber },
                   ].map(s => (
                     <div key={s.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", gap: 8 }}>
                       <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1, fontWeight: 600, flexShrink: 0 }}>{s.label}</span>
-                      <span style={{
-                        fontSize: 10, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: s.color,
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>{s.value}</span>
+                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: s.color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {s.value}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -838,29 +647,21 @@ export default function GDLETNexus() {
           </div>
         );
 
-      default:
-        return null;
+      default: return null;
     }
   };
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
+  // ─── RENDER ──────────────────────────────────────────────────────────────────
   return (
     <div id="nexus-root" style={{
       width: "100%", height: "100vh", background: T.bg0, color: T.text,
       fontFamily: "'Exo 2', 'Rajdhani', 'Segoe UI', monospace",
-      display: "flex", flexDirection: "column", overflow: "hidden",
-      position: "relative",
+      display: "flex", flexDirection: "column", overflow: "hidden", position: "relative",
     }}>
 
       <style>{`
-        @keyframes scroll-ticker {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.4; }
-        }
+        @keyframes scroll-ticker { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         #nexus-root, #nexus-root * { box-sizing: border-box; margin: 0; padding: 0; }
         #nexus-root ::-webkit-scrollbar { width: 4px; }
         #nexus-root ::-webkit-scrollbar-track { background: ${T.bg0}; }
@@ -869,22 +670,21 @@ export default function GDLETNexus() {
         #nexus-root .nexus-input::placeholder { color: ${T.textMuted}; }
         #nexus-root .nexus-nav-btn:hover { background: rgba(139,92,246,0.08) !important; }
         #nexus-root .nexus-layer-btn:hover { background: rgba(139,92,246,0.08) !important; }
+        #nexus-root .nexus-mic-btn:hover { border-color: ${T.accentBright} !important; }
       `}</style>
 
-      {/* ─── TOP BAR ───────────────────────────────────────────────── */}
+      {/* TOP BAR */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "6px 16px", background: T.bg1,
-        borderBottom: `1px solid ${T.border}`,
-        minHeight: 40, zIndex: 20,
+        padding: "6px 16px", background: T.bg1, borderBottom: `1px solid ${T.border}`,
+        minHeight: 40, zIndex: 20, flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{
             width: 28, height: 28, borderRadius: "50%",
             background: `radial-gradient(circle at 40% 40%, ${T.accentBright}, ${T.accentDim})`,
             display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: `0 0 12px ${T.accentGlow}`,
-            fontSize: 13, fontWeight: 800, color: "#fff",
+            boxShadow: `0 0 12px ${T.accentGlow}`, fontSize: 13, fontWeight: 800, color: "#fff",
           }}>N</div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 3, color: T.accentSoft }}>GDLET NEXUS</div>
@@ -894,12 +694,12 @@ export default function GDLETNexus() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.green, boxShadow: `0 0 6px ${T.green}` }} />
-            <span style={{ color: T.textDim, letterSpacing: 1 }}>147 FEEDS</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: wsColor, boxShadow: `0 0 5px ${wsColor}` }} />
+            <span style={{ color: T.textDim, letterSpacing: 1 }}>NEXUS API</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.amber, boxShadow: `0 0 6px ${T.amber}` }} />
-            <span style={{ color: T.textDim, letterSpacing: 1 }}>3 THREATS</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: dataStatus.flights === "ok" ? T.green : T.amber, boxShadow: `0 0 5px ${T.amber}` }} />
+            <span style={{ color: T.textDim, letterSpacing: 1 }}>ADS-B</span>
           </div>
           <div style={{
             background: riskIndex > 70 ? "rgba(248,113,113,0.15)" : "rgba(251,191,36,0.15)",
@@ -911,19 +711,21 @@ export default function GDLETNexus() {
         </div>
 
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.accentSoft, letterSpacing: 2 }}>{utc} <span style={{ fontSize: 9, color: T.textMuted }}>UTC</span></div>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.accentSoft, letterSpacing: 2 }}>
+            {utc} <span style={{ fontSize: 9, color: T.textMuted }}>UTC</span>
+          </div>
           <div style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>{dateStr}</div>
         </div>
       </div>
 
-      {/* ─── MAIN LAYOUT ──────────────────────────────────────────── */}
+      {/* MAIN LAYOUT */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
 
         {/* LEFT NAV */}
         <div style={{
           width: 52, background: T.bg1, borderRight: `1px solid ${T.border}`,
           display: "flex", flexDirection: "column", alignItems: "center",
-          paddingTop: 8, gap: 2,
+          paddingTop: 8, gap: 2, flexShrink: 0,
         }}>
           {navItems.map(n => (
             <button key={n.id} type="button" className="nexus-nav-btn" onClick={() => setActiveView(n.id)}
@@ -941,11 +743,13 @@ export default function GDLETNexus() {
 
           <div style={{ flex: 1 }} />
 
+          {/* Copilot toggle */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, marginBottom: 12 }}>
             <button type="button" onClick={() => setCopilotOpen(!copilotOpen)} style={{
-              width: 36, height: 36, borderRadius: "50%", border: `1px solid ${copilotOpen ? T.accent : T.border}`,
-              background: copilotOpen ? T.accentGlow : T.bg2, cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 36, height: 36, borderRadius: "50%",
+              border: `1px solid ${copilotOpen ? T.accent : T.border}`,
+              background: copilotOpen ? T.accentGlow : T.bg2,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
               transition: "all 0.2s",
               boxShadow: copilotOpen ? `0 0 12px ${T.accentGlow}` : "none",
             }}>
@@ -957,66 +761,202 @@ export default function GDLETNexus() {
 
         {/* CENTER CONTENT */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-          {renderCenter()}
+
+          {/* Layer selector — CMD view */}
+          {activeView === "command" && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
+              background: T.bg1, borderBottom: `1px solid ${T.border}`,
+              flexWrap: "wrap", flexShrink: 0,
+            }}>
+              {["hotspots", "flights", "shipping", "weather", "sanctions", "infra"].map(l => (
+                <button key={l} type="button" className="nexus-layer-btn" onClick={() => setMapLayer(l)}
+                  style={{
+                    padding: "3px 10px",
+                    border: `1px solid ${mapLayer === l ? T.accent : T.border}`,
+                    borderRadius: 3, fontSize: 9, letterSpacing: 1, fontWeight: 600,
+                    textTransform: "uppercase", cursor: "pointer",
+                    background: mapLayer === l ? T.accentGlow : "transparent",
+                    color: mapLayer === l ? T.accentBright : T.textMuted,
+                    transition: "all 0.15s", fontFamily: "inherit",
+                  }}>{l}</button>
+              ))}
+              <div style={{ flex: 1 }} />
+              <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>
+                LAYER: {mapLayer.toUpperCase()} • {HOTSPOTS.length} NODES •{" "}
+                {dataStatus.flights === "ok" ? `${flights.length} TRACKED` : "ADS-B LOADING…"}
+              </span>
+            </div>
+          )}
+
+          {/* Flight header — AIR view */}
+          {activeView === "flights" && (
+            <div style={{
+              padding: "8px 12px", background: T.bg1,
+              borderBottom: `1px solid ${T.border}`,
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              flexShrink: 0,
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: T.accentSoft }}>
+                FLIGHT INTELLIGENCE — ADS-B LIVE VIA OPENSKY + ADS-B EXCHANGE
+              </div>
+              <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>
+                {dataStatus.flights === "ok" ? `${flights.length} AIRBORNE` : "LOADING…"}
+              </span>
+            </div>
+          )}
+
+          {/* 3D Globe — always mounted; display toggled for map views */}
+          <CesiumGlobe
+            flights={flights}
+            hotspots={HOTSPOTS}
+            news={news}
+            activeLayer={mapLayer}
+            showHotspots={activeView === "command"}
+            selectedHotspot={selectedHotspot}
+            onHotspotSelect={setSelectedHotspot}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: (activeView === "command" || activeView === "flights") ? "flex" : "none",
+            }}
+          />
+
+          {/* Flight table — AIR view, below the globe */}
+          {activeView === "flights" && (
+            <div style={{
+              background: T.bg1, borderTop: `1px solid ${T.border}`,
+              padding: "6px 12px", maxHeight: 180, overflow: "auto", flexShrink: 0,
+            }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                    {["CALLSIGN", "TYPE", "ALT", "SPEED", "ORIGIN"].map(h => (
+                      <th key={h} style={{
+                        padding: "4px 8px", textAlign: "left",
+                        fontSize: 8, fontWeight: 700, letterSpacing: 1, color: T.textMuted,
+                      }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {flights.slice(0, 80).map(f => {
+                    const tc = { SURV: T.amber, MIL: T.red, COM: T.accentSoft, CARGO: T.cyan };
+                    return (
+                      <tr key={f.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                        <td style={{ padding: "5px 8px", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: T.text }}>
+                          {f.callsign}
+                        </td>
+                        <td style={{ padding: "5px 8px" }}>
+                          <span style={{
+                            fontSize: 8, fontWeight: 700, letterSpacing: 1,
+                            color: tc[f.type] || T.textMuted,
+                            background: `${tc[f.type] || T.textMuted}18`,
+                            padding: "1px 6px", borderRadius: 2,
+                          }}>{f.type}</span>
+                        </td>
+                        <td style={{ padding: "5px 8px", fontFamily: "'JetBrains Mono', monospace", color: T.textDim }}>{f.alt}</td>
+                        <td style={{ padding: "5px 8px", fontFamily: "'JetBrains Mono', monospace", color: T.textDim }}>{f.speed}</td>
+                        <td style={{ padding: "5px 8px", fontSize: 9, color: T.textDim }}>{f.origin}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Non-map views (news / markets / research / daily) */}
+          {!["command", "flights"].includes(activeView) && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+              {renderCenter()}
+            </div>
+          )}
+
         </div>
 
-        {/* RIGHT PANELS */}
+        {/* RIGHT SIDEBAR */}
         <div style={{
           width: 300, background: T.bg1, borderLeft: `1px solid ${T.border}`,
-          display: "flex", flexDirection: "column", overflow: "hidden",
+          display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0,
         }}>
-          <Panel title="LIVE INTELLIGENCE FEED" icon="▤" badge={`${NEWS_ITEMS.length}`} style={{ flex: 1, minHeight: 0 }}>
+          {/* News panel */}
+          <Panel title="LIVE INTELLIGENCE FEED" icon="◉"
+            badge={dataStatus.news === "ok" ? `${news.length}` : "…"}
+            style={{ flex: 1, minHeight: 0 }}>
             <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
-              {["ALL", "BREAKING", "MARKET-MOVING", "ESCALATING"].map(f => (
+              {["ALL", "BREAKING", "ESCALATING", "WATCH"].map(f => (
                 <button key={f} type="button" onClick={() => setNewsFilter(f)} style={{
-                  padding: "2px 7px", border: `1px solid ${newsFilter === f ? T.accent : T.border}`,
+                  padding: "2px 7px",
+                  border: `1px solid ${newsFilter === f ? T.accent : T.border}`,
                   borderRadius: 2, fontSize: 8, letterSpacing: 0.5, fontWeight: 600, cursor: "pointer",
                   background: newsFilter === f ? T.accentGlow : "transparent",
                   color: newsFilter === f ? T.accentBright : T.textMuted,
+                  fontFamily: "inherit",
                 }}>{f}</button>
               ))}
             </div>
-            {filteredNews.map(n => (
-              <div key={n.id} style={{
-                padding: "7px 8px", marginBottom: 4, borderRadius: 4,
-                background: T.accentGlow2, border: `1px solid ${T.border}`,
-                cursor: "pointer", transition: "border-color 0.15s",
-              }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
-                onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                  <span style={{ fontSize: 7, fontWeight: 800, letterSpacing: 1, color: n.color, background: `${n.color}15`, padding: "1px 5px", borderRadius: 2 }}>{n.label}</span>
-                  <span style={{ fontSize: 8, color: T.textMuted }}>{n.time}</span>
-                </div>
-                <div style={{ fontSize: 10, color: T.text, lineHeight: 1.4, fontWeight: 500 }}>{n.title}</div>
-                <div style={{ fontSize: 8, color: T.textMuted, marginTop: 3, letterSpacing: 0.5 }}>{n.region}</div>
-              </div>
-            ))}
-          </Panel>
 
-          <Panel title="MARKETS" icon="◈" badge="LIVE" style={{ height: 260, flexShrink: 0 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-              {MARKETS.map(m => (
-                <div key={m.sym} style={{ padding: "4px 6px", background: T.accentGlow2, borderRadius: 3, border: `1px solid ${T.border}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: T.accentSoft, letterSpacing: 1 }}>{m.sym}</span>
-                    <Sparkline data={sparkData[m.sym]} color={m.up ? T.green : T.red} w={36} h={12} />
+            {filteredNews.length === 0 && (
+              <div style={{ fontSize: 9, color: T.textMuted, padding: "8px 0", textAlign: "center" }}>
+                {dataStatus.news === "loading" ? "Fetching…" :
+                 dataStatus.news === "error"   ? "GDELT unavailable — retrying…" :
+                 "No items"}
+              </div>
+            )}
+
+            {filteredNews.map((n, i) => {
+              const { label, color } = toneToLabel(n.tone);
+              return (
+                <div key={i}
+                  style={{
+                    padding: "7px 8px", marginBottom: 4, borderRadius: 4,
+                    background: T.accentGlow2, border: `1px solid ${T.border}`,
+                    cursor: "pointer", transition: "border-color 0.15s",
+                  }}
+                  onClick={() => n.url && window.open(n.url, "_blank")}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = T.borderActive}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = T.border}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                    <span style={{
+                      fontSize: 7, fontWeight: 800, letterSpacing: 1,
+                      color, background: `${color}18`, padding: "1px 5px", borderRadius: 2,
+                    }}>{label}</span>
+                    <span style={{ fontSize: 8, color: T.textMuted }}>{gdeltAge(n.seendate)}</span>
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.text, marginTop: 2 }}>{m.val}</div>
-                  <div style={{ fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: m.up ? T.green : T.red }}>{m.chg}</div>
+                  <div style={{ fontSize: 10, color: T.text, lineHeight: 1.4, fontWeight: 500 }}>{n.title}</div>
+                  <div style={{ fontSize: 8, color: T.textMuted, marginTop: 3 }}>{n.domain}</div>
                 </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 6, padding: "5px 7px", background: "rgba(248,113,113,0.06)", border: `1px solid rgba(248,113,113,0.15)`, borderRadius: 3 }}>
-              <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: T.amber, marginBottom: 2 }}>AI INSIGHT</div>
-              <div style={{ fontSize: 9, color: T.textDim, lineHeight: 1.4 }}>
-                Brent +3.14% correlates with Red Sea vessel diversions. VIX elevated — ECB signaling driving EUR vol. Semiconductor names may gap on TSMC yield news.
-              </div>
-            </div>
+              );
+            })}
           </Panel>
 
-          <Panel title="TODAY'S AGENDA" icon="☰" style={{ height: 160, flexShrink: 0 }}>
+          {/* Markets panel */}
+          <Panel title="MARKETS" icon="◎"
+            badge={dataStatus.markets === "ok" ? "LIVE" : "…"}
+            style={{ height: 260, flexShrink: 0 }}>
+            {markets.length === 0
+              ? <div style={{ fontSize: 9, color: T.textMuted, textAlign: "center", padding: "20px 0" }}>Fetching prices…</div>
+              : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                  {markets.map(m => (
+                    <div key={m.sym} style={{ padding: "4px 6px", background: T.accentGlow2, borderRadius: 3, border: `1px solid ${T.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: T.accentSoft, letterSpacing: 1 }}>{m.sym}</span>
+                        <Sparkline data={sparkData[m.sym] || makeSparkData(m.sym)} color={m.up ? T.green : T.red} w={36} h={12} />
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.text, marginTop: 2 }}>{m.val}</div>
+                      <div style={{ fontSize: 9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: m.up ? T.green : T.red }}>{m.chg}</div>
+                    </div>
+                  ))}
+                </div>
+              )
+            }
+          </Panel>
+
+          {/* Agenda panel */}
+          <Panel title="TODAY'S AGENDA" icon="◷" style={{ height: 160, flexShrink: 0 }}>
             {AGENDA.map((a, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: `1px solid ${T.border}` }}>
                 <span style={{ fontSize: 10, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", color: T.accentSoft, minWidth: 38 }}>{a.time}</span>
@@ -1024,7 +964,8 @@ export default function GDLETNexus() {
                 <span style={{
                   fontSize: 7, letterSpacing: 0.5, padding: "1px 5px", borderRadius: 2,
                   background: a.tag === "travel" ? "rgba(248,113,113,0.15)" : T.accentGlow2,
-                  color: a.tag === "travel" ? T.amber : T.textMuted, fontWeight: 600, textTransform: "uppercase",
+                  color: a.tag === "travel" ? T.amber : T.textMuted,
+                  fontWeight: 600, textTransform: "uppercase",
                 }}>{a.tag}</span>
               </div>
             ))}
@@ -1032,18 +973,19 @@ export default function GDLETNexus() {
         </div>
       </div>
 
-      {/* ─── AI COPILOT DRAWER ─────────────────────────────────────── */}
+      {/* COPILOT DRAWER */}
       {copilotOpen && (
         <div style={{
-          position: "absolute", bottom: 0, left: 52, right: 0,
-          height: 280, background: `linear-gradient(180deg, ${T.bg2}f5, ${T.bg0}fa)`,
+          position: "absolute", bottom: 0, left: 52, right: 0, height: 270,
+          background: `linear-gradient(180deg, ${T.bg2}f5, ${T.bg0}fa)`,
           backdropFilter: "blur(16px)",
           borderTop: `1px solid ${T.borderActive}`,
           display: "flex", flexDirection: "column", zIndex: 30,
         }}>
+          {/* Copilot header */}
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "8px 16px", borderBottom: `1px solid ${T.border}`,
+            padding: "8px 16px", borderBottom: `1px solid ${T.border}`, flexShrink: 0,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{
@@ -1052,38 +994,35 @@ export default function GDLETNexus() {
               }} />
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2, color: T.accentSoft }}>NEXUS COPILOT</span>
               <span style={{ fontSize: 8, color: T.textMuted, letterSpacing: 1 }}>— CROSS-DOMAIN INTELLIGENCE SYNTHESIS</span>
+              <div style={{
+                width: 5, height: 5, borderRadius: "50%", background: wsColor,
+                boxShadow: `0 0 4px ${wsColor}`, marginLeft: 4,
+              }} />
+              <span style={{ fontSize: 8, color: T.textMuted }}>{wsStatus}</span>
             </div>
-            <button type="button" onClick={() => setCopilotOpen(false)} style={{ background: "none", border: "none", color: T.textMuted, fontSize: 16, cursor: "pointer" }}>×</button>
+            <button type="button" onClick={() => setCopilotOpen(false)}
+              style={{ background: "none", border: "none", color: T.textMuted, fontSize: 16, cursor: "pointer" }}>×</button>
           </div>
 
+          {/* Messages */}
           <div ref={copilotRef} style={{ flex: 1, overflow: "auto", padding: "10px 16px" }}>
             {copilotMessages.map((m, i) => (
               <div key={i} style={{ marginBottom: 8, display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
                 <div style={{
-                  maxWidth: "75%", padding: "8px 12px", borderRadius: 6,
+                  maxWidth: "76%", padding: "8px 12px", borderRadius: 6,
                   background: m.role === "user" ? T.accentGlow : T.accentGlow2,
                   border: `1px solid ${m.role === "user" ? T.accent : T.border}`,
                 }}>
                   {m.role === "nexus" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                      <span style={{ fontSize: 7, fontWeight: 700, letterSpacing: 1.5, color: T.accentSoft }}>NEXUS</span>
-                      {m.verified && <span style={{ fontSize: 7, color: T.green, letterSpacing: 1 }}>✓ VERIFIED</span>}
-                      {m.source === "voice" && <span style={{ fontSize: 7, color: T.cyan, letterSpacing: 1 }}>🎙 VOICE</span>}
-                    </div>
+                    <div style={{ fontSize: 7, fontWeight: 700, letterSpacing: 1.5, color: T.accentSoft, marginBottom: 3 }}>NEXUS</div>
                   )}
-                  {m.role === "user" && m.source === "voice" && (
-                    <div style={{ fontSize: 7, color: T.cyan, letterSpacing: 1, marginBottom: 3 }}>🎙 VOICE INPUT</div>
-                  )}
-                  <div style={{ fontSize: 10.5, color: T.text, lineHeight: 1.5 }}>{m.text}</div>
+                  <div style={{ fontSize: 10.5, color: T.text, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{m.text}</div>
                 </div>
               </div>
             ))}
             {copilotLoading && (
-              <div style={{ marginBottom: 8, display: "flex", justifyContent: "flex-start" }}>
-                <div style={{
-                  maxWidth: "75%", padding: "8px 12px", borderRadius: 6,
-                  background: T.accentGlow2, border: `1px solid ${T.border}`,
-                }}>
+              <div style={{ marginBottom: 8, display: "flex" }}>
+                <div style={{ padding: "8px 12px", borderRadius: 6, background: T.accentGlow2, border: `1px solid ${T.border}` }}>
                   <div style={{ fontSize: 7, fontWeight: 700, letterSpacing: 1.5, color: T.accentSoft, marginBottom: 3 }}>NEXUS</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span style={{ fontSize: 10, color: T.accentSoft, letterSpacing: 1.5, animation: "pulse 1.5s infinite" }}>PROCESSING</span>
@@ -1091,8 +1030,7 @@ export default function GDLETNexus() {
                       {[0, 1, 2].map(d => (
                         <div key={d} style={{
                           width: 4, height: 4, borderRadius: "50%", background: T.accentSoft,
-                          animation: `pulse 1.2s ${d * 0.2}s infinite`,
-                          display: "inline-block",
+                          animation: `pulse 1.2s ${d * 0.2}s infinite`, display: "inline-block",
                         }} />
                       ))}
                     </div>
@@ -1102,49 +1040,47 @@ export default function GDLETNexus() {
             )}
           </div>
 
-          {/* ── Input row with WS status + mic button ── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderTop: `1px solid ${T.border}` }}>
+          {/* Voice status bar */}
+          {voiceActive && (
+            <div style={{
+              padding: "4px 16px", background: `rgba(139,92,246,0.08)`,
+              borderTop: `1px solid ${T.border}`,
+              display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.green, animation: "pulse 1s infinite" }} />
+              <span style={{ fontSize: 9, color: T.textDim, letterSpacing: 1 }}>VOICE: {voiceStatus}</span>
+            </div>
+          )}
 
-            {/* WebSocket status dot */}
+          {/* Input row */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "8px 16px", borderTop: `1px solid ${T.border}`, flexShrink: 0,
+          }}>
             <div style={{
               width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-              background: wsStatus === "CONNECTED" ? T.green : wsStatus === "CONNECTING" ? T.amber : T.red,
-              boxShadow: `0 0 4px ${wsStatus === "CONNECTED" ? T.green : wsStatus === "CONNECTING" ? T.amber : T.red}`,
-            }} title={`API Bridge: ${wsStatus}`} />
+              background: wsStatus === "CONNECTED" ? (copilotLoading ? T.amber : T.accentBright) : T.red,
+              boxShadow: `0 0 4px ${wsStatus === "CONNECTED" ? T.accentBright : T.red}`,
+            }} />
 
-            {/* Mic button */}
-            <button type="button" onClick={toggleVoice} title={voiceActive ? "Stop voice" : "Start voice"} style={{
-              width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
-              border: `1px solid ${voiceActive ? T.red : T.border}`,
-              background: voiceActive ? "rgba(248,113,113,0.15)" : "transparent",
-              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-              transition: "all 0.2s", fontFamily: "inherit",
-              animation: voiceStatus === "RECORDING" ? "pulse 1s infinite" : "none",
-              boxShadow: voiceStatus === "RECORDING" ? `0 0 8px rgba(248,113,113,0.5)` : "none",
-            }}>
-              <span style={{ fontSize: 14, color: voiceActive ? T.red : T.textMuted }}>
-                {voiceStatus === "TRANSCRIBING" || voiceStatus === "PROCESSING" ? "⟳" : "🎙"}
-              </span>
-            </button>
+            <button type="button" className="nexus-mic-btn" onClick={toggleVoice}
+              disabled={wsStatus !== "CONNECTED"}
+              style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                border: `1px solid ${voiceActive ? T.accent : T.border}`,
+                background: voiceActive ? T.accentGlow : "transparent",
+                cursor: wsStatus === "CONNECTED" ? "pointer" : "not-allowed",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.2s", fontSize: 13,
+                opacity: wsStatus === "CONNECTED" ? 1 : 0.4,
+              }}>🎙</button>
 
-            {/* Voice status badge */}
-            {voiceActive && (
-              <span style={{
-                fontSize: 8, fontWeight: 700, letterSpacing: 1, flexShrink: 0,
-                padding: "2px 7px", borderRadius: 3,
-                background: voiceStatus === "RECORDING" ? "rgba(248,113,113,0.2)" : T.accentGlow2,
-                border: `1px solid ${voiceStatus === "RECORDING" ? T.red : T.accent}`,
-                color: voiceStatus === "RECORDING" ? T.red : T.accentSoft,
-              }}>{voiceStatus}</span>
-            )}
-
-            {/* Text input */}
             <input
               className="nexus-input"
               value={copilotInput}
               onChange={e => setCopilotInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && sendCopilot()}
-              placeholder={copilotLoading ? "NEXUS is processing..." : "Ask NEXUS anything across all intelligence domains..."}
+              placeholder={copilotLoading ? "NEXUS is processing…" : voiceActive ? "Voice active — or type here…" : "Ask NEXUS anything…"}
               disabled={copilotLoading}
               style={{
                 flex: 1, background: T.accentGlow2, border: `1px solid ${T.border}`,
@@ -1153,7 +1089,7 @@ export default function GDLETNexus() {
                 opacity: copilotLoading ? 0.5 : 1,
               }}
               onFocus={e => { if (!copilotLoading) e.target.style.borderColor = T.accent; }}
-              onBlur={e => e.target.style.borderColor = T.border}
+              onBlur={e => { e.target.style.borderColor = T.border; }}
             />
 
             <button type="button" onClick={sendCopilot} disabled={copilotLoading} style={{
@@ -1167,25 +1103,29 @@ export default function GDLETNexus() {
         </div>
       )}
 
-      {/* ─── BOTTOM TICKER ─────────────────────────────────────────── */}
+      {/* BOTTOM TICKER */}
       <div style={{
         display: "flex", alignItems: "center", padding: "4px 16px",
         background: T.bg1, borderTop: `1px solid ${T.border}`,
-        overflow: "hidden", minHeight: 24,
+        overflow: "hidden", minHeight: 24, flexShrink: 0,
       }}>
         <span style={{ fontSize: 7, fontWeight: 700, letterSpacing: 1.5, color: T.accentDim, marginRight: 12, flexShrink: 0 }}>TICKER</span>
         <div style={{ overflow: "hidden", whiteSpace: "nowrap", flex: 1 }}>
-          <div style={{ display: "inline-block", animation: "scroll-ticker 45s linear infinite" }}>
-            {[...MARKETS, ...MARKETS].map((m, i) => (
-              <span key={i} style={{ marginRight: 24, fontSize: 9, letterSpacing: 0.5 }}>
-                <span style={{ color: T.accentSoft, fontWeight: 600 }}>{m.sym}</span>
-                <span style={{ color: T.textDim, marginLeft: 6, fontFamily: "'JetBrains Mono', monospace" }}>{m.val}</span>
-                <span style={{ color: m.up ? T.green : T.red, marginLeft: 4, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{m.chg}</span>
-              </span>
-            ))}
-          </div>
+          {markets.length > 0 ? (
+            <div style={{ display: "inline-block", animation: "scroll-ticker 45s linear infinite" }}>
+              {[...markets, ...markets].map((m, i) => (
+                <span key={i} style={{ marginRight: 24, fontSize: 9, letterSpacing: 0.5 }}>
+                  <span style={{ color: T.accentSoft, fontWeight: 600 }}>{m.sym}</span>
+                  <span style={{ color: T.textDim, marginLeft: 6, fontFamily: "'JetBrains Mono', monospace" }}>{m.val}</span>
+                  <span style={{ color: m.up ? T.green : T.red, marginLeft: 4, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{m.chg}</span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span style={{ fontSize: 9, color: T.textMuted, letterSpacing: 1 }}>FETCHING LIVE MARKET DATA…</span>
+          )}
         </div>
-        <span style={{ fontSize: 7, color: T.textMuted, letterSpacing: 1, flexShrink: 0, marginLeft: 12 }}>NEXUS v0.4.0 • SESSION 04</span>
+        <span style={{ fontSize: 7, color: T.textMuted, letterSpacing: 1, flexShrink: 0, marginLeft: 12 }}>NEXUS v0.5.0 • SESSION 04→05</span>
       </div>
     </div>
   );
